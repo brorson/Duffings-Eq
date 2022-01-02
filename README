@@ -17,6 +17,7 @@ samples the time series and then makes a plot of fixed points
 vs. gamma.  The goal is to plot the period-doubling cascade to chaos.
 
 To build this stuff:
+mkdir build
 cd build
 cmake ..
 cd ..
