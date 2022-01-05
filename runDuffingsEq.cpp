@@ -142,7 +142,7 @@ int main()
   plot.ylabel("y");
   
   // Iterate over gamma values to simulate.
-  for (realtype gam = 0.2; gam<=0.34; gam+=0.02) {
+  for (realtype gam = 0.2; gam<=0.24; gam+=0.02) {
     udata->gamma = gam;
   
     // Do the actual integration in this sub-fcn.

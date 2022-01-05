@@ -85,7 +85,7 @@ set_property(TARGET ${src} PROPERTY CXX_STANDARD 17)
 set(src "sampleDuffingsEq")
 add_executable(${src} "${src}.cpp")
 target_include_directories(${src} PRIVATE ${SUNDIALS_INCLUDE_DIR}  ${LIBM_INCLUDE_DIR} ${SCIPLOT_INCLUDE_DIR} )
-target_link_libraries(${src} PUBLIC ${SUNDIALS_LIBRARIES})
+target_link_libraries(${src} PUBLIC ${SUNDIALS_LIBRARIES} ${VTK_LIBRARIES})
 set_property(TARGET ${src} PROPERTY CXX_STANDARD 17)
 
 vtk_module_autoinit(

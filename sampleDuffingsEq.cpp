@@ -31,7 +31,7 @@
 #include <iostream>
 #include <iomanip>      // std::setprecision
 
-// C includes -- maybe I should clean these out?
+// C includes -- maybe I should clean these out?  Do I use them?
 #include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
@@ -42,25 +42,23 @@
 #include <sunmatrix/sunmatrix_dense.h> /* access to dense SUNMatrix       */
 #include <sunlinsol/sunlinsol_dense.h> /* access to dense SUNLinearSolver */
 
+
 // VTK stuff for plotting
-#include <vtkActor.h>
-#include <vtkCamera.h>
 #include <vtkNew.h>
+#include <vtkSmartPointer.h>
+#include <vtkInteractorStyleImage.h>
+#include <vtkCamera.h>
 #include <vtkRenderWindow.h>
 #include <vtkRenderWindowInteractor.h>
 #include <vtkInteractorStyleTrackballCamera.h>
 #include <vtkRenderer.h>
+#include <vtkImageMapper3D.h>
 #include <vtkImageData.h>
-#include <vtkUniformGrid.h>
 #include <vtkLookupTable.h>
 #include <vtkImageMapToColors.h>
 #include <vtkImageActor.h>
 #include <vtkImageProperty.h>
-#include <vtkImageMapper.h>
-#include <vtkInteractorStyleImage.h>
-#include <vtkTextProperty.h>
-#include <vtkVector.h>
-#include <vtkSmartPointerBase.h>
+
 
 /* Precision specific formatting macros */
 #define GSYM "g"
@@ -80,11 +78,12 @@
 #define OMEGA 1.2
 
 /* simulation control parameters */
-#define TSTOP  10000.0            // Simulation run time
+#define TSTOP  50000.0            // Simulation run time
 #define DELTAT (2*PI/OMEGA)      // Simulation time step = drive period
-#define TREC   9800.0          // Time to start recording points.
+#define TREC   49300.0          // Time to start recording points.
 #define NUMPTS ceil((TSTOP-TREC)/DELTAT)
-
+#define RTOL   1e-7
+#define ATOL   1e-9
 
 /* User-defined data structure */
 typedef struct UserData_
@@ -106,7 +105,8 @@ typedef struct UserData_
 
 /* Subfcn which integrates the ODE */
 static int integrate_ode(SUNContext sunctx, UserData user_data,
-			 std::vector<double> &tp, std::vector<double> &yp);
+			 std::vector<double> &tp, std::vector<double> &yp,
+			 double &y0, double &y1);
 
 /* Functions provided to CVODE to integrate the ODE */
 static int f(realtype t, N_Vector y, N_Vector ydot, void *user_data);
@@ -122,8 +122,10 @@ static int check_retval(void *returnvalue, const char *funcname, int opt);
 
 
 /* Fcns which help make the bifurcation diagram */
-static int insert_fixedpts_image(std::vector<vector<double>> &fixedpts,
-				 std::vector<double> gams);
+static int insert_fixedpts_image(std::vector<double> gams,
+				 std::vector<std::vector<double> > fixedpts);
+static int get_ij(double xmin, double xmax, double x, double ymin, double ymax, double y, int Nx, int Ny, int& i, int& j);
+
 
 //==========================================================================
 /* ---------------------------------------------------------------------------
@@ -145,7 +147,7 @@ int main()
   // Stuff used to create bifurcation diagram
   std::vector<double> gams;    // Vector of gamma values
   // Vector of vectors to hold fixed point results
-  std::vector<vector<double>> fixedpts;
+  std::vector<std::vector<double> > fixedpts;
   
   /* Create the SUNDIALS context */
   // Since I run on a serial machine, the context is NULL.
@@ -161,8 +163,8 @@ int main()
   udata->beta = BETA;
   udata->omega = OMEGA;
 
-  udata->rtol = RCONST(1.0e-11);
-  udata->atol = RCONST(1.0e-14);
+  udata->rtol = RCONST(RTOL);
+  udata->atol = RCONST(ATOL);
 
   udata->tstop = RCONST(TSTOP);    /* Sim run time */
   udata->dt = RCONST(DELTAT);      /* Data point period */
@@ -176,27 +178,32 @@ int main()
   // Period 2 when gam = 0.270
   // Period 4 when gam = 0.290
   // Period 8 when gam = 0.292
-  realtype gammin = 0.292;
-  realtype gammax = 0.292;
-  realtype dgam   = 0.05;
-  for (gam = gammin; gam<=gammax; gam+=dgam) {
+  realtype gammin = 0.260;
+  realtype gammax = 0.300;
+  realtype dgam   = 0.0001;
+  double y0 = MONE;
+  double y1 = MONE;
+
+  for (realtype gam = gammin; gam<=gammax; gam+=dgam) {
     udata->gamma = gam;
     std::cout << "gam = " << gam << std::endl;
   
     // Do the actual integration in this sub-fcn.
-    integrate_ode(sunctx, udata, tp, yp);
+    integrate_ode(sunctx, udata, tp, yp, y0, y1);
 
+#if 1
     // Print out results
     for (int i=0; i<yp.size(); i++) {
       std::cout << "yp[" << i <<"] = " << yp[i] << std::endl;
     }
+#endif
 
     // Here is where I accumulate the fixed points found for this
     // gamma.
     gams.push_back(gam);    
     fixedpts.push_back(yp);
-    
-    std::cout << "----------------------------------------" << std::endl;
+
+    std::cout << "==========================================" << std::endl;
   }
 
   // Now call fcn which creates bifurcation diagram and plots it.
@@ -214,7 +221,8 @@ int main()
  * the fixed points plotted in the main program.
  * ---------------------------------------------------------------------------*/
 static int integrate_ode(SUNContext sunctx, UserData user_data,
-			 std::vector<double> &tp, std::vector<double> &yp) {
+			 std::vector<double> &tp, std::vector<double> &yp,
+			 double &y0, double &y1) {
   void            *cvode_mem = NULL; /* CVODE memory         */
   N_Vector         y         = NULL; /* solution vector      */
   realtype        *ydata     = NULL; /* solution vector data */
@@ -235,9 +243,9 @@ static int integrate_ode(SUNContext sunctx, UserData user_data,
 
   /* Set initial condition */
   ydata    = N_VGetArrayPointer(y);
-  ydata[0] = MONE;
-  ydata[1] = MONE;
-
+  ydata[0] = y0;
+  ydata[1] = y1;
+  
   /* Create CVODE memory.  Use BDF (backward differentiation) method */
   cvode_mem = CVodeCreate(CV_BDF, sunctx);
   if (check_retval((void *)cvode_mem, "CVodeCreate", 0)) return(1);
@@ -301,9 +309,17 @@ static int integrate_ode(SUNContext sunctx, UserData user_data,
       idx++;
     }
 
+    // Set this point to initial condition for next run
+    ydata[0] = yp[0];
+    ydata[1] = yp[1];
+    
     /* Update output time */
     tout += user_data->dt;
   }
+
+  // Cache final position to use as IC for next run.
+  y0 = yp[0];
+  y1 = yp[1];
 
   /* Print some final statistics about run */
   PrintStats(cvode_mem);
@@ -321,55 +337,156 @@ static int integrate_ode(SUNContext sunctx, UserData user_data,
 //----------------------------------------------------------------
 /* Create and display VTK image of bifurcation diagram.
  */
-insert_fixedpts_image(std::vector<double> gams,
-		      std::vector<vector<double>> fixedpts) {
+static int insert_fixedpts_image(std::vector<double> gams,
+				 std::vector<std::vector<double> > fixedpts) {
 
-  // Set the origin
-  double x0 = gams[0];
-  double y0 = fixedpts[0];
+  // Image size in pixels
+  int Nx = 600;
+  int Ny = 600;
+  
+  // Get the min & max values of gamma.  This is used to set plot limits.
+  double xmin = gams.front();
+  double xmax = gams.back();  
+
+  // Get ymin and ymax.
+  double ymin = 9999.9;
+  double ymax = -9999.9;
+  int dimx = fixedpts.size();     // Number of lambdas
+  int dimy = fixedpts[0].size();  // Vertical slice of bif diag.
+  for (int ix = 0; ix < dimx; ix++) {
+    for (int iy = 0; iy < dimy; iy++) {
+      double y = fixedpts[ix][iy];
+
+      // Hack to ignore fixed points y>0.  I only accumulate fixed
+      // points if they're negative.  I also find ymin and ymax here.
+      if (y < 0.0) {
+	// Check to see if this value is running min or max.
+	if (y < ymin) ymin = y;
+	if (y > ymax) ymax = y;
+      }
+    }
+  }
+  std::cout << "xmin = " << xmin << ", xmax = " << xmax << std::endl;
+  std::cout << "ymin = " << ymin << ", ymax = " << ymax << std::endl;  
+
+  // Little hack to give some margin at top and bottom of plot.
+  // Note this relies on all points being negative.  Reverse the
+  // multipliers if I examine positive fixed points.
+  ymin = 1.05*ymin;
+  ymax = 0.95*ymax;
+  
 
   // Declare VTK image thing here.
-  vtkSmartPointer<vtkUniformGrid> fImageData = 
-    vtkSmartPointer<vtkUniformGrid>::New();
-
+  vtkSmartPointer<vtkImageData> fImageData = 
+    vtkSmartPointer<vtkImageData>::New();
   
-  // Now initialize the 
-  //fImageData->SetDimensions(Nx, Ny, 1);  // I want a 2D image, Nx x Ny
-  fImageData->SetExtent( 0, Nx-1, 0, Ny-1, 0, 0 );
-  fImageData->SetSpacing(dx, dy, 1.0);
-  fImageData->SetOrigin(x0, y0, 0.0);     // This sets pos of lower left corner.
+  // Now initialize the image
+  std::cout << "Initialize the image" << std::endl;
+  fImageData->SetDimensions(Nx, Ny, 1);  // I want a 2D image, Nx x Ny
   fImageData->AllocateScalars(VTK_DOUBLE, 1); 
+
+  // Fill in image -- iterate over fixedpts, convert each fixed point value to
+  // an index into the image, then color that pixel.
+  std::cout << "Iterate over fixedpts and fill out image" << std::endl;  
+  std::cout << "dimx = " << dimx << ", dimy = " << dimy << std::endl; 
+  int i;
+  int j;
+  double *pixel;
+  for (int ix = 0; ix < dimx; ix++) {
+    for (int iy = 0; iy < dimy; iy++) {
+      //std::cout << "[ix, iy] = [" << ix << ", " << iy << "]";
+      double x = gams[ix];
+      double y = fixedpts[ix][iy];
+
+      // Hack to ignore fixed points y>0.  I only accumulate fixed
+      // points if they're negative.  I also find ymin and ymax here.
+      if (y < 0.0) {
+	//std::cout << " ... [x, y] = [" << x << ", " << y << "]"; 
+	get_ij(xmin, xmax, x, ymin, ymax, y, Nx, Ny, i, j);
+	//std::cout << " ... [i, j] = [" << i << ", " << j << "]" << std::endl;           
+	// Set pixel value
+	pixel = static_cast<double*>(fImageData->GetScalarPointer(i, j, 0));
+	*pixel = 1.0;
+      }
+    }
+  }
+
+  // Set up lookup table -- used to color the pixels.
+  vtkSmartPointer<vtkLookupTable> lookupTable =
+    vtkSmartPointer<vtkLookupTable>::New();
+  lookupTable->SetTableRange(0.0, 1.0);
+  lookupTable->SetTableValue(0, 1.0, 1.0, 1.0, 1.0);
+  lookupTable->Build();
+
   
   // Create mapper and image actor
   vtkSmartPointer<vtkImageActor> imageActor =
     vtkSmartPointer<vtkImageActor>::New();
-  vtkSmartPointer<vtkImageMapper3D> imageMapper =
-    static_cast<vtkImageMapper3D*>(imageActor->GetMapper());
-  imageActor->InterpolateOff();
+  
+  std::cout << "Create bifurcation plane" << std::endl;  
+  vtkSmartPointer<vtkImageMapToColors> bifurcationPlane =
+    vtkSmartPointer<vtkImageMapToColors>::New();
+  bifurcationPlane->SetLookupTable(lookupTable);
+  bifurcationPlane->PassAlphaToOutputOn();
+  bifurcationPlane->SetInputData(fImageData);
+  std::cout << "Set input data to bifurcation plane" << std::endl;      
+  imageActor->GetMapper()->SetInputConnection(bifurcationPlane->GetOutputPort());
 
   // Create renderer
-  cout << "Create rendering stuff ..." << endl;
+  std::cout << "Create renderer" << std::endl;    
   vtkNew<vtkRenderer> renderer;
   renderer->AddActor(imageActor);
     
   // Create render window
+  std::cout << "Create render window" << std::endl;      
   vtkNew<vtkRenderWindow> renWin;
   renWin->AddRenderer(renderer);
-  renWin->SetSize(600, 600);
+  renWin->SetSize(Nx, Ny);
   renWin->SetWindowName("Duffings eq bifurcation diagram");
 
   // Create interactor and interactor style
+  std::cout << "Create interactor and interactor style" << std::endl;
   vtkNew<vtkRenderWindowInteractor> iren;
   iren->SetRenderWindow(renWin);
-  vtkSmartPointer<customMouseInteractorStyle> iStyle =
-      vtkSmartPointer<customMouseInteractorStyle>::New();
+  vtkSmartPointer<vtkInteractorStyleImage> iStyle =
+    vtkSmartPointer<vtkInteractorStyleImage>::New();
   iren->SetInteractorStyle(iStyle);
 
-  // Iterate over fixedpts, convert each fixed point value to
-  // an index into the image, then color that pixel.
+  // Do rendering
+  cout << "Render stuff in window..." << endl;
+  renWin->Render();
+  renWin->SetSize(Nx, Ny);
 
+  cout << "Initialize interactor......" << endl;  
+  iren->Initialize();
+
+  cout << "Start interactor event loop......" << endl;    
+  iren->Start();
   
+  return(0);
 }
+
+
+//--------------------------------------------------------------
+// Given physical coords [x,y] deduce position in image [i,j].
+static int get_ij(double xmin, double xmax, double x, double ymin, double ymax, double y, int Nx, int Ny, int& i, int& j) {
+  double a;
+
+  // First do x axis
+  a = (x-xmin)/(xmax-xmin);
+  i = floor(a*(Nx-1));
+  if (i<0) i = 0;
+  if (i>(Nx-1)) i = Nx-1;
+
+  // Now do y axis
+  a = (y-ymin)/(ymax-ymin);
+  j = floor(a*(Ny-1));
+  if (j<0) j = 0;
+  if (j>(Ny-1)) j = Ny-1;  
+  
+  return(0);
+}
+
 
 
 /* -----------------------------------------------------------------------------
