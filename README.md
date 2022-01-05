@@ -16,6 +16,9 @@ sampleDuffingsEq.cpp -- sweeps through gamma values, periodically
 samples the time series and then makes a plot of fixed points
 vs. gamma.  The goal is to plot the period-doubling cascade to chaos.
 
+![Bifurcation diagram](BifurcationDiagram.png)
+
+
 To build this stuff:
 mkdir build
 cd build
