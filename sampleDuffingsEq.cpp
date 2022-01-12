@@ -58,7 +58,8 @@
 #include <vtkImageMapToColors.h>
 #include <vtkImageActor.h>
 #include <vtkImageProperty.h>
-
+#include <vtkCubeAxesActor2D.h>
+#include <vtkMapper2D.h>
 
 /* Precision specific formatting macros */
 #define GSYM "g"
@@ -78,7 +79,7 @@
 #define OMEGA 1.2
 
 /* simulation control parameters */
-#define TSTOP  50000.0            // Simulation run time
+#define TSTOP  60000.0            // Simulation run time
 #define DELTAT (2*PI/OMEGA)      // Simulation time step = drive period
 #define TREC   49300.0          // Time to start recording points.
 #define NUMPTS ceil((TSTOP-TREC)/DELTAT)
@@ -178,9 +179,10 @@ int main()
   // Period 2 when gam = 0.270
   // Period 4 when gam = 0.290
   // Period 8 when gam = 0.292
+  // Best range:  .260 -- .300
   realtype gammin = 0.260;
   realtype gammax = 0.300;
-  realtype dgam   = 0.0001;
+  realtype dgam   = 0.00004;  // 0.004 for speed
   double y0 = MONE;
   double y1 = MONE;
 
@@ -341,8 +343,8 @@ static int insert_fixedpts_image(std::vector<double> gams,
 				 std::vector<std::vector<double> > fixedpts) {
 
   // Image size in pixels
-  int Nx = 600;
-  int Ny = 600;
+  int Nx = 800;
+  int Ny = 800;
   
   // Get the min & max values of gamma.  This is used to set plot limits.
   double xmin = gams.front();
@@ -432,11 +434,24 @@ static int insert_fixedpts_image(std::vector<double> gams,
   std::cout << "Set input data to bifurcation plane" << std::endl;      
   imageActor->GetMapper()->SetInputConnection(bifurcationPlane->GetOutputPort());
 
+  // Create axes
+  vtkSmartPointer<vtkCubeAxesActor2D> axesActor =
+    vtkSmartPointer<vtkCubeAxesActor2D>::New();
+  std::cout << "Configure axesActor" << std::endl;        
+  axesActor->SetLabelFormat("%6.4g");
+  axesActor->SetInputConnection(bifurcationPlane->GetOutputPort());
+  axesActor->ZAxisVisibilityOff();
+  axesActor->SetUseRanges(1);
+  axesActor->SetRanges(xmin, xmax, ymin, ymax, 0,0);
+  
   // Create renderer
   std::cout << "Create renderer" << std::endl;    
-  vtkNew<vtkRenderer> renderer;
+  vtkSmartPointer<vtkRenderer> renderer = vtkSmartPointer<vtkRenderer>::New();
   renderer->AddActor(imageActor);
-    
+  axesActor->SetCamera(renderer->GetActiveCamera());
+  renderer->AddViewProp(axesActor);
+  renderer->ResetCamera();
+  
   // Create render window
   std::cout << "Create render window" << std::endl;      
   vtkNew<vtkRenderWindow> renWin;
