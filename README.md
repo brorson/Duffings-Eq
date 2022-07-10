@@ -18,13 +18,14 @@ vs. gamma.  The goal is to plot the period-doubling cascade to chaos.
 
 ![Bifurcation diagram](BifurcationDiagram.png)
 
-
+----------------------------------------------------------
 To build this stuff:
-mkdir build
-cd build
-cmake -S .. -B ..
-cd ..
-make
+
+mkdir build   
+cd build   
+cmake -S .. -B ..   
+cd ..   
+make  
 
 
 Jan 2022.
